@@ -1,0 +1,95 @@
+name: Build ZeroClaw Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_ref:
+        description: "Branch, tag, or commit from zeroclaw-labs/zeroclaw"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zeroclaw-manual-build-${{ github.event.inputs.repo_ref || 'main' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: zeroclaw
+            archive_ext: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: zeroclaw
+            archive_ext: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: zeroclaw
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: zeroclaw.exe
+            archive_ext: zip
+
+    defaults:
+      run:
+        working-directory: zeroclaw
+
+    steps:
+      - name: Checkout zeroclaw source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: zeroclaw-labs/zeroclaw
+          ref: ${{ inputs.repo_ref || 'main' }}
+          path: zeroclaw
+          fetch-depth: 1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: zeroclaw-${{ matrix.target }}
+          workspaces: |
+            zeroclaw -> target
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          tar -C "target/${{ matrix.target }}/release" -czf "../zeroclaw-${{ matrix.target }}.tar.gz" "${{ matrix.artifact }}"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "target/${{ matrix.target }}/release/${{ matrix.artifact }}"
+          $archive = "../zeroclaw-${{ matrix.target }}.zip"
+          Compress-Archive -Path $binary -DestinationPath $archive -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: zeroclaw-${{ matrix.target }}
+          path: zeroclaw-${{ matrix.target }}.${{ matrix.archive_ext }}
+          retention-days: 3
