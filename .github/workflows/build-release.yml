@@ -1,0 +1,101 @@
+name: Build release
+
+# Builds a tagged release of another repository and uploads the files to that repository's own
+# release. The repository provides ci/release.sh (Linux) and ci/release.ps1 (Windows), which put
+# the files in out/. PRIVATE_REPO_TOKEN: a fine-grained token for that repository only,
+# Contents read and write. Nothing is kept here (no artifacts).
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "owner/name"
+        required: true
+        type: string
+      ref:
+        description: "Tag to build (e.g. v1.2.3)"
+        required: true
+        type: string
+      check_only:
+        description: "Only check the token can read the repository"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ inputs.repository }}-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  REPO: ${{ inputs.repository }}
+  REF: ${{ inputs.ref }}
+
+jobs:
+  release:
+    name: Check and create the release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the token
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "PRIVATE_REPO_TOKEN is empty"; exit 1; fi
+          gh api "repos/$REPO" --silent && echo "token can read the repository"
+          gh api "repos/$REPO/git/ref/tags/$REF" --silent && echo "tag found" \
+            || echo "tag not found (fine for a check)"
+      - name: Create the release if it isn't there
+        if: ${{ !inputs.check_only }}
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          gh release view "$REF" -R "$REPO" >/dev/null 2>&1 \
+            || gh release create "$REF" -R "$REPO" --verify-tag --generate-notes --title "$REF"
+
+  linux:
+    name: Linux ${{ matrix.target }}
+    needs: release
+    if: ${{ !inputs.check_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash ci/release.sh "${{ matrix.target }}" "$REF"
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: gh release upload "$REF" out/* -R "$REPO" --clobber
+
+  windows:
+    name: Windows
+    needs: release
+    if: ${{ !inputs.check_only }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pwsh -File ci/release.ps1 -Ref "$env:REF"
+      - name: Upload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: gh release upload "$env:REF" (Get-ChildItem out).FullName -R "$env:REPO" --clobber
