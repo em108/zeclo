@@ -2,16 +2,13 @@ name: Build release
 
 # Builds a tagged release of another repository and uploads the files to that repository's own
 # release. The repository provides ci/release.sh (Linux) and ci/release.ps1 (Windows), which put
-# the files in out/. PRIVATE_REPO_TOKEN: a fine-grained token for that repository only,
-# Contents read and write. Nothing is kept here (no artifacts).
+# the files in out/. Secrets: PRIVATE_REPO (owner/name, so logs show *** for it) and
+# PRIVATE_REPO_TOKEN (a fine-grained token for that repository only, Contents read and write).
+# Nothing is kept here (no artifacts).
 
 on:
   workflow_dispatch:
     inputs:
-      repository:
-        description: "owner/name"
-        required: true
-        type: string
       ref:
         description: "Tag to build (e.g. v1.2.3)"
         required: true
@@ -21,17 +18,22 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: "Build everything but upload nothing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-${{ inputs.repository }}-${{ inputs.ref }}
+  group: build-${{ inputs.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  REPO: ${{ inputs.repository }}
+  REPO: ${{ secrets.PRIVATE_REPO }}
   REF: ${{ inputs.ref }}
 
 jobs:
@@ -43,12 +45,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then echo "PRIVATE_REPO_TOKEN is empty"; exit 1; fi
+          if [ -z "$GH_TOKEN" ] || [ -z "$REPO" ]; then echo "PRIVATE_REPO or PRIVATE_REPO_TOKEN is empty"; exit 1; fi
           gh api "repos/$REPO" --silent && echo "token can read the repository"
           gh api "repos/$REPO/git/ref/tags/$REF" --silent && echo "tag found" \
             || echo "tag not found (fine for a check)"
       - name: Create the release if it isn't there
-        if: ${{ !inputs.check_only }}
+        if: ${{ !inputs.check_only && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
@@ -69,13 +71,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.repository }}
+          repository: ${{ secrets.PRIVATE_REPO }}
           ref: ${{ inputs.ref }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: bash ci/release.sh "${{ matrix.target }}" "$REF"
       - name: Upload
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: gh release upload "$REF" out/* -R "$REPO" --clobber
@@ -88,13 +91,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.repository }}
+          repository: ${{ secrets.PRIVATE_REPO }}
           ref: ${{ inputs.ref }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: pwsh -File ci/release.ps1 -Ref "$env:REF"
       - name: Upload
+        if: ${{ !inputs.dry_run }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
