@@ -2,13 +2,21 @@ name: Build release
 
 # Builds a tagged release of another repository and uploads the files to that repository's own
 # release. The repository provides ci/release.sh (Linux) and ci/release.ps1 (Windows), which put
-# the files in out/. Secrets: PRIVATE_REPO (owner/name, so logs show *** for it) and
-# PRIVATE_REPO_TOKEN (a fine-grained token for that repository only, Contents read and write).
-# Nothing is kept here (no artifacts).
+# the files in out/. Nothing is kept here (no artifacts).
+#
+# Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token for
+# all the owner's repositories, Contents read and write). Without the input: the PRIVATE_REPO
+# secret with PRIVATE_REPO_TOKEN. Each job reads the name from the event file and masks it first,
+# so the logs show *** for it.
 
 on:
   workflow_dispatch:
     inputs:
+      repo:
+        description: "Repository to build (owner/name); empty uses the PRIVATE_REPO secret"
+        required: false
+        default: ""
+        type: string
       ref:
         description: "Tag to build (e.g. v1.2.3)"
         required: true
@@ -33,7 +41,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  REPO: ${{ secrets.PRIVATE_REPO }}
   REF: ${{ inputs.ref }}
 
 jobs:
@@ -41,18 +48,28 @@ jobs:
     name: Check and create the release
     runs-on: ubuntu-latest
     steps:
+      - name: Choose the repository
+        shell: bash
+        env:
+          SECRET_REPO: ${{ secrets.PRIVATE_REPO }}
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          [ -n "$r" ] || r="$SECRET_REPO"
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
       - name: Check the token
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          if [ -z "$GH_TOKEN" ] || [ -z "$REPO" ]; then echo "PRIVATE_REPO or PRIVATE_REPO_TOKEN is empty"; exit 1; fi
+          if [ -z "$GH_TOKEN" ] || [ -z "$REPO" ]; then echo "no repository or token (repo input with RELEASE_TOKEN, or the PRIVATE_REPO pair)"; exit 1; fi
           gh api "repos/$REPO" --silent && echo "token can read the repository"
           gh api "repos/$REPO/git/ref/tags/$REF" --silent && echo "tag found" \
             || echo "tag not found (fine for a check)"
       - name: Create the release if it isn't there
         if: ${{ !inputs.check_only && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
         run: |
           gh release view "$REF" -R "$REPO" >/dev/null 2>&1 \
             || gh release create "$REF" -R "$REPO" --verify-tag --generate-notes --title "$REF"
@@ -69,18 +86,28 @@ jobs:
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Choose the repository
+        shell: bash
+        env:
+          SECRET_REPO: ${{ secrets.PRIVATE_REPO }}
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          [ -n "$r" ] || r="$SECRET_REPO"
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
-          repository: ${{ secrets.PRIVATE_REPO }}
+          repository: ${{ env.REPO }}
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: bash ci/release.sh "${{ matrix.target }}" "$REF"
       - name: Upload
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
         run: gh release upload "$REF" out/* -R "$REPO" --clobber
 
   windows:
@@ -89,11 +116,21 @@ jobs:
     if: ${{ !inputs.check_only }}
     runs-on: windows-latest
     steps:
+      - name: Choose the repository
+        shell: bash
+        env:
+          SECRET_REPO: ${{ secrets.PRIVATE_REPO }}
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          [ -n "$r" ] || r="$SECRET_REPO"
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
-          repository: ${{ secrets.PRIVATE_REPO }}
+          repository: ${{ env.REPO }}
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: pwsh -File ci/release.ps1 -Ref "$env:REF"
@@ -101,5 +138,5 @@ jobs:
         if: ${{ !inputs.dry_run }}
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
         run: gh release upload "$env:REF" (Get-ChildItem out).FullName -R "$env:REPO" --clobber
