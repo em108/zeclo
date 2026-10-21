@@ -110,6 +110,12 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      # Downloaded crates only (public sources): compiled output of a private repository is
+      # never cached here, because a public repository's caches can be read by fork workflows.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-on-failure: true
       - run: bash ci/release.sh "${{ matrix.target }}" "$REF"
       - name: Upload
         if: ${{ !inputs.dry_run }}
@@ -140,6 +146,12 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      # Downloaded crates only (public sources): compiled output of a private repository is
+      # never cached here, because a public repository's caches can be read by fork workflows.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-on-failure: true
       - run: pwsh -File ci/release.ps1 -Ref "$env:REF"
       - name: Upload
         if: ${{ !inputs.dry_run }}
@@ -171,6 +183,12 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      # Downloaded crates only (public sources): compiled output of a private repository is
+      # never cached here, because a public repository's caches can be read by fork workflows.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-on-failure: true
       - name: Phone app (signed with the owner's Android key)
         env:
           ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
@@ -205,6 +223,12 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      # Downloaded crates only (public sources): compiled output of a private repository is
+      # never cached here, because a public repository's caches can be read by fork workflows.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          cache-on-failure: true
       - name: Test build (x86_64, debug key)
         run: bash ci/android.sh x86_64-linux-android "$REF"
       - name: Let the emulator use KVM
