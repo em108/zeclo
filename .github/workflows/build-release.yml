@@ -110,11 +110,11 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      # Downloaded crates only (public sources): compiled output of a private repository is
-      # never cached here, because a public repository's caches can be read by fork workflows.
+      # Downloaded and compiled dependencies (public crates), keyed by the repository's
+      # Cargo.lock. rust-cache removes the repository's own crates from target/ before saving,
+      # so no private code or embedded assets reach this public repository's cache.
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-targets: false
           cache-on-failure: true
       - run: bash ci/release.sh "${{ matrix.target }}" "$REF"
       - name: Upload
@@ -146,11 +146,11 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      # Downloaded crates only (public sources): compiled output of a private repository is
-      # never cached here, because a public repository's caches can be read by fork workflows.
+      # Downloaded and compiled dependencies (public crates), keyed by the repository's
+      # Cargo.lock. rust-cache removes the repository's own crates from target/ before saving,
+      # so no private code or embedded assets reach this public repository's cache.
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-targets: false
           cache-on-failure: true
       - run: pwsh -File ci/release.ps1 -Ref "$env:REF"
       - name: Upload
@@ -183,11 +183,11 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      # Downloaded crates only (public sources): compiled output of a private repository is
-      # never cached here, because a public repository's caches can be read by fork workflows.
+      # Downloaded and compiled dependencies (public crates), keyed by the repository's
+      # Cargo.lock. rust-cache removes the repository's own crates from target/ before saving,
+      # so no private code or embedded assets reach this public repository's cache.
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-targets: false
           cache-on-failure: true
       - name: Phone app (signed with the owner's Android key)
         env:
@@ -223,11 +223,11 @@ jobs:
           token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      # Downloaded crates only (public sources): compiled output of a private repository is
-      # never cached here, because a public repository's caches can be read by fork workflows.
+      # Downloaded and compiled dependencies (public crates), keyed by the repository's
+      # Cargo.lock. rust-cache removes the repository's own crates from target/ before saving,
+      # so no private code or embedded assets reach this public repository's cache.
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-targets: false
           cache-on-failure: true
       - name: Test build (x86_64, debug key)
         run: bash ci/android.sh x86_64-linux-android "$REF"
