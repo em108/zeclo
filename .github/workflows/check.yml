@@ -1,0 +1,51 @@
+name: Check
+
+# Runs another repository's checks (its ci/check.sh: format, lints, tests) on a free public
+# runner, for a branch or a commit. Same repository rules as build-release.yml: the `repo`
+# input with RELEASE_TOKEN, read from the event file and masked before any other step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Repository to check (owner/name)"
+        required: true
+        type: string
+      ref:
+        description: "Branch, tag or commit"
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Choose the repository
+        shell: bash
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: bash ci/check.sh

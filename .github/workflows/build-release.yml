@@ -7,7 +7,9 @@ name: Build release
 # Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token for
 # all the owner's repositories, Contents read and write). Without the input: the PRIVATE_REPO
 # secret with PRIVATE_REPO_TOKEN. Each job reads the name from the event file and masks it first,
-# so the logs show *** for it.
+# so the logs show *** for it. With `android`, the repository's ci/android.sh builds a phone app
+# (signed with ANDROID_KEYSTORE / ANDROID_KEYSTORE_PASSWORD) and ci/android-check.sh starts a test
+# build on an emulator.
 
 on:
   workflow_dispatch:
@@ -28,6 +30,11 @@ on:
         type: boolean
       dry_run:
         description: "Build everything but upload nothing"
+        required: false
+        default: false
+        type: boolean
+      android:
+        description: "Also build the Android app (the repository's ci/android.sh) and start it on an emulator"
         required: false
         default: false
         type: boolean
@@ -140,3 +147,89 @@ jobs:
         env:
           GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
         run: gh release upload "$env:REF" (Get-ChildItem out).FullName -R "$env:REPO" --clobber
+
+  android:
+    name: Android
+    needs: release
+    if: ${{ !inputs.check_only && inputs.android }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Choose the repository
+        shell: bash
+        env:
+          SECRET_REPO: ${{ secrets.PRIVATE_REPO }}
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          [ -n "$r" ] || r="$SECRET_REPO"
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Phone app (signed with the owner's Android key)
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: bash ci/android.sh aarch64-linux-android "$REF"
+      - name: Upload
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
+        run: gh release upload "$REF" out/*.apk -R "$REPO" --clobber
+
+  android-check:
+    name: Android emulator check
+    needs: release
+    if: ${{ !inputs.check_only && inputs.android }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Choose the repository
+        shell: bash
+        env:
+          SECRET_REPO: ${{ secrets.PRIVATE_REPO }}
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          [ -n "$r" ] || r="$SECRET_REPO"
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test build (x86_64, debug key)
+        run: bash ci/android.sh x86_64-linux-android "$REF"
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Start it on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: bash ci/android-check.sh
+      # The screenshot can show private content: it goes to the repository's own
+      # pre-release "android-check", never to this public repository.
+      - name: Keep the screenshot (privately)
+        if: always()
+        env:
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          [ -f out/android-check.png ] || exit 0
+          gh release view android-check -R "$REPO" >/dev/null 2>&1 \
+            || gh release create android-check -R "$REPO" --prerelease --title "Android emulator check" --notes "Screenshots from the emulator check." --target "$REF" >/dev/null 2>&1 \
+            || true
+          gh release upload android-check out/android-check.png out/android-check-log.txt -R "$REPO" --clobber
+
