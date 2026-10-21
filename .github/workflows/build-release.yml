@@ -251,9 +251,9 @@ jobs:
         env:
           GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          [ -f out/android-check.png ] || exit 0
+          ls out/android-check*.png >/dev/null 2>&1 || exit 0
           gh release view android-check -R "$REPO" >/dev/null 2>&1 \
             || gh release create android-check -R "$REPO" --prerelease --title "Android emulator check" --notes "Screenshots from the emulator check." --target "$REF" >/dev/null 2>&1 \
             || true
-          gh release upload android-check out/android-check.png out/android-check-log.txt -R "$REPO" --clobber
+          gh release upload android-check out/android-check*.png out/android-check-log.txt -R "$REPO" --clobber
 
