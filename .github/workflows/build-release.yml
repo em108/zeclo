@@ -4,6 +4,11 @@ name: Build release
 # release. The repository provides ci/release.sh (Linux) and ci/release.ps1 (Windows), which put
 # the files in out/. Nothing is kept here (no artifacts).
 #
+# Which Linux-runner targets: the repository's ci/release-targets at that ref, one Rust target per
+# line (# comments allowed), e.g. aarch64-linux-android for a Termux build. Each runs
+# `ci/release.sh TARGET REF` on its own runner (aarch64-unknown-linux-* on an arm64 one). Without
+# the file: x86_64-unknown-linux-musl and aarch64-unknown-linux-musl.
+#
 # Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token for
 # all the owner's repositories, Contents read and write). Without the input: the PRIVATE_REPO
 # secret with PRIVATE_REPO_TOKEN. Each job reads the name from the event file and masks it first,
@@ -54,6 +59,8 @@ jobs:
   release:
     name: Check and create the release
     runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.targets.outputs.matrix }}
     steps:
       - name: Choose the repository
         shell: bash
@@ -73,6 +80,18 @@ jobs:
           gh api "repos/$REPO" --silent && echo "token can read the repository"
           gh api "repos/$REPO/git/ref/tags/$REF" --silent && echo "tag found" \
             || echo "tag not found (fine for a check)"
+      - name: Choose the Linux targets
+        id: targets
+        env:
+          GH_TOKEN: ${{ (github.event.inputs.repo != '' && secrets.RELEASE_TOKEN) || secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          t=$(gh api "repos/$REPO/contents/ci/release-targets?ref=$REF" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+          [ -n "$t" ] || t=$'x86_64-unknown-linux-musl\naarch64-unknown-linux-musl'
+          m=$(printf '%s\n' "$t" | sed 's/#.*//' | awk 'NF {print $1}' | jq -R -s -c '
+            split("\n") | map(select(length > 0))
+            | map({target: ., os: (if startswith("aarch64-unknown-linux") then "ubuntu-24.04-arm" else "ubuntu-latest" end)})')
+          echo "Linux targets: $m"
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
       - name: Create the release if it isn't there
         if: ${{ !inputs.check_only && !inputs.dry_run }}
         env:
@@ -88,9 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+        include: ${{ fromJSON(needs.release.outputs.linux) }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Choose the repository
