@@ -48,4 +48,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Compiled dependencies only; rust-cache drops the repository's own crates before saving.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - run: bash ci/check.sh
