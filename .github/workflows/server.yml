@@ -1,0 +1,125 @@
+name: Server app
+
+# Proves a server application (Go and Node, with Postgres) and, for a tag, builds its release,
+# for another repository. The repository provides:
+#   ci/test.sh    the whole proof (gate, end-to-end, browser screenshots); it writes
+#                 out/test-results.zip (logs and screenshots) and exits non-zero on a failure
+#   ci/release.sh TAG   the release files, into out/
+# Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
+# five newest are kept), and a tag's release files onto its own release. Nothing is kept here.
+#
+# Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token
+# for all the owner's repositories, Contents read and write). Each job reads the name from the
+# event file and masks it first, so the logs show *** for it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Repository (owner/name)"
+        required: true
+        type: string
+      ref:
+        description: "Branch, commit or tag (a tag also builds its release)"
+        required: true
+        default: main
+        type: string
+      skip_tests:
+        description: "Only build the release (the tag's commit was already proved)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Prove
+    if: ${{ !inputs.skip_tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Choose the repository
+        shell: bash
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Go linter (the repository's ci/golangci-lint-version, default 2.12.2)
+        run: |
+          v=$(cat ci/golangci-lint-version 2>/dev/null || echo 2.12.2)
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sudo sh -s -- -b /usr/local/bin "v$v"
+      - name: Postgres 18 (local, as the postgres user)
+        run: |
+          sudo systemctl stop postgresql || true
+          sudo apt-get purge -y -qq 'postgresql-1[0-7]*' >/dev/null || true
+          sudo apt-get install -y -qq postgresql-common >/dev/null
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          sudo apt-get install -y -qq postgresql-18 postgresql-client-18 >/dev/null
+          sudo systemctl start postgresql
+          sudo -u postgres psql -qAt -c 'select version()'
+      - name: Web app dependencies
+        run: npm ci --prefix frontend/next --no-audit --no-fund
+      - name: Prove (gate, end-to-end, screenshots)
+        id: prove
+        run: bash ci/test.sh
+      - name: Keep the results (private, on the repository)
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          [ -f out/test-results.zip ] || { echo "no results file"; exit 0; }
+          sha=$(git rev-parse HEAD); tag="ci-${sha:0:7}"
+          mv out/test-results.zip "out/test-results-${sha:0:7}.zip"
+          gh release view "$tag" -R "$REPO" >/dev/null 2>&1 \
+            || gh release create "$tag" -R "$REPO" --prerelease --target "$sha" --title "$tag" --notes "Proof of ${sha:0:7}: ${{ steps.prove.outcome }}"
+          gh release upload "$tag" -R "$REPO" "out/test-results-${sha:0:7}.zip" --clobber
+          gh release list -R "$REPO" --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease and (.tagName|startswith("ci-"))) | .tagName' \
+            | tail -n +6 | while read -r old; do gh release delete "$old" -R "$REPO" --yes --cleanup-tag; done
+
+  release:
+    name: Release
+    needs: test
+    if: ${{ always() && (needs.test.result == 'success' || inputs.skip_tests) && startsWith(github.event.inputs.ref, 'v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Choose the repository
+        shell: bash
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: bash ci/release.sh "${{ inputs.ref }}"
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          REF: ${{ inputs.ref }}
+        run: |
+          gh release view "$REF" -R "$REPO" >/dev/null 2>&1 || gh release create "$REF" -R "$REPO" --verify-tag --generate-notes --title "$REF"
+          gh release upload "$REF" -R "$REPO" out/* --clobber
