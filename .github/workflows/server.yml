@@ -7,7 +7,8 @@ name: Server app
 #                 out/test-results.zip (logs and screenshots) and exits non-zero on a failure
 #   ci/release.sh TAG   the release files, into out/
 # A repository may keep its test data encrypted on its own release (ci/test.sh fetches it with
-# the token and opens it with CI_DATA_KEY). Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
+# the token and opens it with CI_DATA_KEY): the key is the secret CI_DATA_KEY_<NAME> (the
+# repository's name upper-cased, other characters as _), else CI_DATA_KEY. Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
 # five newest are kept), and a tag's release files onto its own release. Nothing is kept here.
 #
 # Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token
@@ -107,12 +108,19 @@ jobs:
           sudo -u postgres psql -qAt -c 'select version()'
       - name: Web app dependencies
         run: npm ci --prefix frontend/next --no-audit --no-fund
+      - name: Choose the data key (CI_DATA_KEY_<REPOSITORY NAME>, else CI_DATA_KEY)
+        shell: bash
+        env:
+          ALL: ${{ toJSON(secrets) }}
+        run: |
+          name="CI_DATA_KEY_$(printf '%s' "${REPO#*/}" | tr 'a-z-' 'A-Z_' | tr -c 'A-Z0-9_' '_')"
+          key=$(jq -r --arg n "$name" '.[$n] // .CI_DATA_KEY // ""' <<<"$ALL")
+          if [ -n "$key" ]; then echo "::add-mask::$key"; echo "CI_DATA_KEY=$key" >> "$GITHUB_ENV"; echo "data key: found"; else echo "data key: none (made-up data)"; fi
       - name: Prove (gate, end-to-end, screenshots)
         id: prove
         # The repository's data for the proof, if it keeps one encrypted on its
-        # own release: CI_DATA_KEY opens it, the token fetches it.
+        # own release: CI_DATA_KEY (chosen above) opens it, the token fetches it.
         env:
-          CI_DATA_KEY: ${{ secrets.CI_DATA_KEY }}
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: CI_REPO="$REPO" bash ci/test.sh "${{ matrix.shard }}"
       - name: Keep the results (private, on the repository)
