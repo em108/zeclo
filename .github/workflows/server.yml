@@ -3,6 +3,8 @@ name: Server app
 # Proves a server application (Go and Node, with Postgres) and, for a tag, builds its release,
 # for another repository. The repository provides:
 #   ci/test-shards (optional) one machine per line, run side by side; each runs ci/test.sh NAME
+#                 (the `shards` input names another list, e.g. ci/capture-shards; ci/test.sh
+#                 gets its path as CI_SHARDS_FILE)
 #   ci/test.sh    the whole proof (gate, end-to-end, browser screenshots); it writes
 #                 out/test-results.zip (logs and screenshots) and exits non-zero on a failure
 #   ci/release.sh TAG   the release files, into out/
@@ -26,6 +28,11 @@ on:
         description: "Branch, commit or tag (a tag also builds its release)"
         required: true
         default: main
+        type: string
+      shards:
+        description: "The repository's machine list (default ci/test-shards; e.g. ci/capture-shards)"
+        required: false
+        default: ci/test-shards
         type: string
       skip_tests:
         description: "Only build the release (the tag's commit was already proved)"
@@ -51,13 +58,14 @@ jobs:
           echo "::add-mask::$r"
           echo "::add-mask::${r#*/}"
           echo "REPO=$r" >> "$GITHUB_ENV"
-      - name: "Read ci/test-shards (one machine per line; none: one machine for everything)"
+      - name: "Read the machine list (one machine per line; none: one machine for everything)"
         id: read
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           REF: ${{ inputs.ref }}
+          LIST: ${{ inputs.shards || 'ci/test-shards' }}
         run: |
-          t=$(gh api "repos/$REPO/contents/ci/test-shards?ref=$REF" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+          t=$(gh api "repos/$REPO/contents/$LIST?ref=$REF" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
           m=$(printf '%s\n' "$t" | sed 's/#.*//' | awk 'NF {print $1}' | jq -R -s -c 'split("\n") | map(select(length > 0))')
           [ "$m" != "[]" ] || m='[""]'
           echo "machines: $m"
@@ -123,9 +131,17 @@ jobs:
         id: prove
         # The repository's data for the proof, if it keeps one encrypted on its
         # own release: CI_DATA_KEY (chosen above) opens it, the token fetches it.
+        # COMPARE_*: a sign-in for a look-only comparison capture of another site
+        # (masked; the repository's ci/test.sh decides whether to use it).
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: CI_REPO="$REPO" bash ci/test.sh "${{ matrix.shard }}"
+          CI_SHARDS_FILE: ${{ inputs.shards || 'ci/test-shards' }}
+          COMPARE_EMAIL: ${{ secrets.COMPARE_EMAIL }}
+          COMPARE_PASSWORD: ${{ secrets.COMPARE_PASSWORD }}
+        run: |
+          [ -z "$COMPARE_EMAIL" ] || echo "::add-mask::$COMPARE_EMAIL"
+          [ -z "$COMPARE_PASSWORD" ] || echo "::add-mask::$COMPARE_PASSWORD"
+          CI_REPO="$REPO" bash ci/test.sh "${{ matrix.shard }}"
       - name: Keep the results (private, on the repository)
         if: ${{ always() }}
         env:
