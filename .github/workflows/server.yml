@@ -2,10 +2,12 @@ name: Server app
 
 # Proves a server application (Go and Node, with Postgres) and, for a tag, builds its release,
 # for another repository. The repository provides:
+#   ci/test-shards (optional) one machine per line, run side by side; each runs ci/test.sh NAME
 #   ci/test.sh    the whole proof (gate, end-to-end, browser screenshots); it writes
 #                 out/test-results.zip (logs and screenshots) and exits non-zero on a failure
 #   ci/release.sh TAG   the release files, into out/
-# Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
+# A repository may keep its test data encrypted on its own release (ci/test.sh fetches it with
+# the token and opens it with CI_DATA_KEY). Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
 # five newest are kept), and a tag's release files onto its own release. Nothing is kept here.
 #
 # Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token
@@ -34,9 +36,39 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Prove
+  shards:
+    name: Choose the machines
     if: ${{ !inputs.skip_tests }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - name: Choose the repository
+        shell: bash
+        run: |
+          r=$(jq -r '.inputs.repo // ""' "$GITHUB_EVENT_PATH")
+          echo "::add-mask::$r"
+          echo "::add-mask::${r#*/}"
+          echo "REPO=$r" >> "$GITHUB_ENV"
+      - name: "Read ci/test-shards (one machine per line; none: one machine for everything)"
+        id: read
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          REF: ${{ inputs.ref }}
+        run: |
+          t=$(gh api "repos/$REPO/contents/ci/test-shards?ref=$REF" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+          m=$(printf '%s\n' "$t" | sed 's/#.*//' | awk 'NF {print $1}' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          [ "$m" != "[]" ] || m='[""]'
+          echo "machines: $m"
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Prove ${{ matrix.shard }}
+    needs: shards
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.shards.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -77,18 +109,27 @@ jobs:
         run: npm ci --prefix frontend/next --no-audit --no-fund
       - name: Prove (gate, end-to-end, screenshots)
         id: prove
-        run: bash ci/test.sh
+        # The repository's data for the proof, if it keeps one encrypted on its
+        # own release: CI_DATA_KEY opens it, the token fetches it.
+        env:
+          CI_DATA_KEY: ${{ secrets.CI_DATA_KEY }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: CI_REPO="$REPO" bash ci/test.sh "${{ matrix.shard }}"
       - name: Keep the results (private, on the repository)
         if: ${{ always() }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          SHARD: ${{ matrix.shard }}
         run: |
           [ -f out/test-results.zip ] || { echo "no results file"; exit 0; }
           sha=$(git rev-parse HEAD); tag="ci-${sha:0:7}"
-          mv out/test-results.zip "out/test-results-${sha:0:7}.zip"
+          name="test-results-${sha:0:7}${SHARD:+-$SHARD}-${{ steps.prove.outcome }}.zip"
+          mv out/test-results.zip "out/$name"
+          # Machines finish at different times: the first creates the release.
           gh release view "$tag" -R "$REPO" >/dev/null 2>&1 \
-            || gh release create "$tag" -R "$REPO" --prerelease --target "$sha" --title "$tag" --notes "Proof of ${sha:0:7}: ${{ steps.prove.outcome }}"
-          gh release upload "$tag" -R "$REPO" "out/test-results-${sha:0:7}.zip" --clobber
+            || gh release create "$tag" -R "$REPO" --prerelease --target "$sha" --title "$tag" --notes "Proof of ${sha:0:7}" \
+            || sleep 5
+          gh release upload "$tag" -R "$REPO" "out/$name" --clobber
           gh release list -R "$REPO" --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease and (.tagName|startswith("ci-"))) | .tagName' \
             | tail -n +6 | while read -r old; do gh release delete "$old" -R "$REPO" --yes --cleanup-tag; done
 
