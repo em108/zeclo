@@ -8,7 +8,7 @@ name: Server app
 #   ci/release.sh TAG   the release files, into out/
 # A repository may keep its test data encrypted on its own release (ci/test.sh fetches it with
 # the token and opens it with CI_DATA_KEY): the key is the secret CI_DATA_KEY_<NAME> (the
-# repository's name upper-cased, other characters as _), else CI_DATA_KEY. Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
+# repository's name upper-cased, other characters as _; each listed in the job), else CI_DATA_KEY. Results stay private: the zip goes onto a prerelease of that repository (ci-<commit>; the
 # five newest are kept), and a tag's release files onto its own release. Nothing is kept here.
 #
 # Which repository: the `repo` input (owner/name) with RELEASE_TOKEN (one fine-grained token
@@ -110,11 +110,14 @@ jobs:
         run: npm ci --prefix frontend/next --no-audit --no-fund
       - name: Choose the data key (CI_DATA_KEY_<REPOSITORY NAME>, else CI_DATA_KEY)
         shell: bash
+        # Each repository with a key is named here (a run that reads every secret at
+        # once is held for approval): add a line for a new one.
         env:
-          ALL: ${{ toJSON(secrets) }}
+          KEY_DEFAULT: ${{ secrets.CI_DATA_KEY }}
+          KEY_CES_ERP: ${{ secrets.CI_DATA_KEY_CES_ERP }}
         run: |
-          name="CI_DATA_KEY_$(printf '%s' "${REPO#*/}" | tr 'a-z-' 'A-Z_' | tr -c 'A-Z0-9_' '_')"
-          key=$(jq -r --arg n "$name" '.[$n] // .CI_DATA_KEY // ""' <<<"$ALL")
+          name="KEY_$(printf '%s' "${REPO#*/}" | tr 'a-z-' 'A-Z_' | tr -c 'A-Z0-9_' '_')"
+          key="${!name:-$KEY_DEFAULT}"
           if [ -n "$key" ]; then echo "::add-mask::$key"; echo "CI_DATA_KEY=$key" >> "$GITHUB_ENV"; echo "data key: found"; else echo "data key: none (made-up data)"; fi
       - name: Prove (gate, end-to-end, screenshots)
         id: prove
