@@ -157,7 +157,7 @@ jobs:
             || gh release create "$tag" -R "$REPO" --prerelease --target "$sha" --title "$tag" --notes "Proof of ${sha:0:7}" \
             || sleep 5
           gh release upload "$tag" -R "$REPO" "out/$name" --clobber
-          gh release list -R "$REPO" --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease and (.tagName|startswith("ci-"))) | .tagName' \
+          gh release list -R "$REPO" --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease and (.tagName|startswith("ci-")) and .tagName != "ci-data") | .tagName' \
             | tail -n +6 | while read -r old; do gh release delete "$old" -R "$REPO" --yes --cleanup-tag; done
 
   release:
