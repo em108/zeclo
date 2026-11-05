@@ -104,7 +104,11 @@ jobs:
       - name: Go linter (the repository's ci/golangci-lint-version, default 2.12.2)
         run: |
           v=$(cat ci/golangci-lint-version 2>/dev/null || echo 2.12.2)
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sudo sh -s -- -b /usr/local/bin "v$v"
+          # GitHub downloads sometimes answer 504 for a moment: try three times.
+          for i in 1 2 3; do
+            curl -sSfL --retry 3 --retry-all-errors https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sudo sh -s -- -b /usr/local/bin "v$v" && break
+            [ "$i" = 3 ] && exit 1; sleep 15
+          done
       - name: Postgres 18 (local, as the postgres user)
         run: |
           sudo systemctl stop postgresql || true
