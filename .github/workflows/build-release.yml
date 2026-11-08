@@ -89,7 +89,7 @@ jobs:
           [ -n "$t" ] || t=$'x86_64-unknown-linux-musl\naarch64-unknown-linux-musl'
           m=$(printf '%s\n' "$t" | sed 's/#.*//' | awk 'NF {print $1}' | jq -R -s -c '
             split("\n") | map(select(length > 0))
-            | map({target: ., os: (if startswith("aarch64-unknown-linux") then "ubuntu-24.04-arm" else "ubuntu-latest" end)})')
+            | map({target: ., os: (if startswith("aarch64-unknown-linux") then "ubuntu-24.04-arm" else "ubuntu-24.04" end)})')
           echo "Linux targets: $m"
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
       - name: Create the release if it isn't there
