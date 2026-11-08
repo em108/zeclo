@@ -133,6 +133,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          # Per runner image: build scripts and proc macros compiled on another Ubuntu release
+          # link a different glibc and fail to load ("can't find crate").
+          key: ${{ matrix.os }}
       - run: bash ci/release.sh "${{ matrix.target }}" "$REF"
       - name: Upload
         if: ${{ !inputs.dry_run }}
