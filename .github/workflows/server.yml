@@ -117,11 +117,19 @@ jobs:
           done
       - name: Postgres 18 (local, as the postgres user)
         run: |
+          # The runner's own Ubuntu mirror (azure.archive.ubuntu.com) sometimes
+          # doesn't resolve: then use Ubuntu's main archive, and retry each install.
+          if ! getent hosts azure.archive.ubuntu.com >/dev/null; then
+            echo "the runner's Ubuntu mirror doesn't resolve: using archive.ubuntu.com"
+            echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            sudo apt-get update -qq || true
+          fi
+          retry() { for i in 1 2 3; do "$@" && return 0; echo "attempt $i failed; retrying"; sleep 20; sudo apt-get update -qq || true; done; return 1; }
           sudo systemctl stop postgresql || true
           sudo apt-get purge -y -qq 'postgresql-1[0-7]*' >/dev/null || true
-          sudo apt-get install -y -qq postgresql-common >/dev/null
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
-          sudo apt-get install -y -qq postgresql-18 postgresql-client-18 >/dev/null
+          retry sudo apt-get install -y -qq postgresql-common >/dev/null
+          retry sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          retry sudo apt-get install -y -qq postgresql-18 postgresql-client-18 >/dev/null
           sudo systemctl start postgresql
           sudo -u postgres psql -qAt -c 'select version()'
       - name: Web app dependencies
