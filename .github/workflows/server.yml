@@ -151,13 +151,15 @@ jobs:
           # A machine line marked "nobrowser" runs no browser: nothing to install.
           if grep -qE "^${{ matrix.shard }}( .*)? nobrowser( |$)" "$CI_SHARDS_FILE" 2>/dev/null; then echo "no browser on this machine"; exit 0; fi
           d=~/webkit-debs
-          # A fresh runner's daily updater can hold the package lock for half an hour, and apt
-          # waits on it silently (one machine took 38 s, another 35 min for the same packages):
-          # stop it, wait at most 2 minutes for the lock, and skip the man-page rebuild.
+          # The same packages took 38 s on one runner and 20-35 min on another: stop the daily
+          # updater (it can hold the lock), wait at most 2 minutes for the lock, skip the man-page
+          # rebuild, and never let needrestart ask anything.
           sudo systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
           sudo pkill -f unattended-upgrade 2>/dev/null || true
           sudo rm -f /var/lib/man-db/auto-update
-          apt() { sudo timeout 600 apt-get -o DPkg::Lock::Timeout=120 "$@"; }
+          # Fully non-interactive: needrestart (after an install) can otherwise wait on a prompt
+          # nobody answers, which is what held some machines for 10-30 minutes.
+          apt() { sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 timeout 300 apt-get -o DPkg::Lock::Timeout=120 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"; }
           # Playwright lists what WebKit still needs ("Missing system dependencies", one
           # per indented line), or prints its apt-get command.
           out=$(npx -y playwright@1.60.0 install-deps --dry-run webkit 2>&1 || true)
