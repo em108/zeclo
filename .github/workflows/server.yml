@@ -137,6 +137,9 @@ jobs:
         with:
           path: ~/webkit-debs
           key: webkit-debs-${{ env.ImageOS }}-${{ env.ImageVersion }}-pw1.60.0
+          # A newer runner image starts from the last image's packages (the same Ubuntu
+          # release; they almost always install), instead of 30 minutes on the mirror.
+          restore-keys: webkit-debs-${{ env.ImageOS }}-
       - name: WebKit's system packages (from the cache; filled once per runner image)
         # The browser proof's `playwright install --with-deps webkit` needs about
         # 180 Ubuntu packages, and the runner's mirror has taken 25 minutes for them
