@@ -136,10 +136,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/webkit-debs
-          key: webkit-debs-${{ env.ImageOS }}-${{ env.ImageVersion }}-pw1.60.0
-          # A newer runner image starts from the last image's packages (the same Ubuntu
-          # release; they almost always install), instead of 30 minutes on the mirror.
-          restore-keys: webkit-debs-${{ env.ImageOS }}-
+          # The runner's image variables aren't readable here (this key has always read
+          # "webkit-debs---pw1.60.0"); the job's image is fixed (ubuntu-24.04), so one key serves.
+          key: webkit-debs---pw1.60.0
       - name: WebKit's system packages (from the cache; filled once per runner image)
         # The browser proof's `playwright install --with-deps webkit` needs about
         # 180 Ubuntu packages, and the runner's mirror has taken 25 minutes for them
@@ -152,6 +151,13 @@ jobs:
           # A machine line marked "nobrowser" runs no browser: nothing to install.
           if grep -qE "^${{ matrix.shard }}( .*)? nobrowser( |$)" "$CI_SHARDS_FILE" 2>/dev/null; then echo "no browser on this machine"; exit 0; fi
           d=~/webkit-debs
+          # A fresh runner's daily updater can hold the package lock for half an hour, and apt
+          # waits on it silently (one machine took 38 s, another 35 min for the same packages):
+          # stop it, wait at most 2 minutes for the lock, and skip the man-page rebuild.
+          sudo systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+          sudo pkill -f unattended-upgrade 2>/dev/null || true
+          sudo rm -f /var/lib/man-db/auto-update
+          apt() { sudo timeout 600 apt-get -o DPkg::Lock::Timeout=120 "$@"; }
           # Playwright lists what WebKit still needs ("Missing system dependencies", one
           # per indented line), or prints its apt-get command.
           out=$(npx -y playwright@1.60.0 install-deps --dry-run webkit 2>&1 || true)
@@ -160,14 +166,14 @@ jobs:
           if [ -z "${pkgs// /}" ]; then echo "nothing missing for WebKit, or no list: the repository's install does the rest"; exit 0; fi
           if ls "$d"/*.deb >/dev/null 2>&1; then
             echo "installing $(ls "$d"/*.deb | wc -l) cached packages"
-            sudo apt-get install -y -qq --no-install-recommends "$d"/*.deb >/dev/null && exit 0
+            apt install -y -qq --no-install-recommends "$d"/*.deb >/dev/null && exit 0
             echo "cached packages did not install: fetching them"
           fi
-          sudo apt-get update -qq || true
+          apt update -qq || true
           sudo apt-get clean
-          sudo apt-get install -y -qq --no-install-recommends --download-only $pkgs >/dev/null || { echo "download failed: the repository's install does it"; exit 0; }
+          apt install -y -qq --no-install-recommends --download-only $pkgs >/dev/null || { echo "download failed: the repository's install does it"; exit 0; }
           mkdir -p "$d" && cp /var/cache/apt/archives/*.deb "$d"/ 2>/dev/null || true
-          sudo apt-get install -y -qq --no-install-recommends $pkgs >/dev/null || echo "install failed: the repository's install does it"
+          apt install -y -qq --no-install-recommends $pkgs >/dev/null || echo "install failed: the repository's install does it"
           echo "cached $(ls "$d"/*.deb 2>/dev/null | wc -l) packages"
       - name: Web app dependencies
         run: npm ci --prefix frontend/next --no-audit --no-fund
