@@ -143,7 +143,11 @@ jobs:
         # (81 kB/s). With them installed here, that install only fetches the browser.
         # Any failure here just leaves the repository's own install to do it.
         shell: bash
+        env:
+          CI_SHARDS_FILE: ${{ inputs.shards || 'ci/test-shards' }}
         run: |
+          # A machine line marked "nobrowser" runs no browser: nothing to install.
+          if grep -qE "^${{ matrix.shard }}( .*)? nobrowser( |$)" "$CI_SHARDS_FILE" 2>/dev/null; then echo "no browser on this machine"; exit 0; fi
           d=~/webkit-debs
           # Playwright lists what WebKit still needs ("Missing system dependencies", one
           # per indented line), or prints its apt-get command.
